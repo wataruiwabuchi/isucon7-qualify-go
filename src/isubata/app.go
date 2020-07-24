@@ -664,7 +664,17 @@ func postProfile(c echo.Context) error {
 	}
 
 	if avatarName != "" && len(avatarData) > 0 {
-		_, err := db.Exec("INSERT INTO image (name, data) VALUES (?, ?)", avatarName, avatarData)
+		//_, err := db.Exec("INSERT INTO image (name, data) VALUES (?, ?)", avatarName, avatarData)
+		filename := fmt.Sprintf("../public/icons/%s", avatarName)
+		wf, err := os.Create(filename)
+		defer wf.Close()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// 固定長部分を書き込み
+		err = binary.Write(wf, binary.BigEndian, avatarData)
+
 		if err != nil {
 			return err
 		}
@@ -762,7 +772,7 @@ func main() {
 
 	e.GET("add_channel", getAddChannel)
 	e.POST("add_channel", postAddChannel)
-	e.GET("/icons/:file_name", getIcon)
+	//e.GET("/icons/:file_name", getIcon)
 
 	e.Start(":5000")
 }
