@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	crand "crypto/rand"
 	"crypto/sha1"
 	"database/sql"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gorilla/sessions"
 	"github.com/jmoiron/sqlx"
@@ -34,6 +36,8 @@ const (
 var (
 	db            *sqlx.DB
 	ErrBadReqeust = echo.NewHTTPError(http.StatusBadRequest)
+	rdb           *redis.Client
+	ctx           = context.Background()
 )
 
 type Renderer struct {
@@ -65,6 +69,18 @@ func init() {
 	if db_password != "" {
 		db_password = ":" + db_password
 	}
+	redis_addr := os.Getenv("ISUBATA_REDIS_ADDR")
+	if redis_addr != "" {
+		redis_addr = "127.0.0.1"
+	}
+	redis_user := os.Getenv("ISUBATA_REDIS_USER")
+	if redis_user != "" {
+		redis_user = "root"
+	}
+	redis_password := os.Getenv("ISUBATA_REDIS_PASSWORD")
+	if redis_password != "" {
+		redis_password = ""
+	}
 
 	dsn := fmt.Sprintf("%s%s@tcp(%s:%s)/isubata?parseTime=true&loc=Local&charset=utf8mb4",
 		db_user, db_password, db_host, db_port)
@@ -78,6 +94,17 @@ func init() {
 		}
 		log.Println(err)
 		time.Sleep(time.Second * 3)
+	}
+
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redis_addr,
+		Username: redis_user,
+		Password: redis_password, // no password set
+		DB:       0,              // use default DB
+	})
+	err := rdb.Set(ctx, "key", "value", 0).Err()
+	if err != nil {
+		panic(err)
 	}
 
 	db.SetMaxOpenConns(20)
