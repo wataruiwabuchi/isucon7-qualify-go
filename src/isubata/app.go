@@ -12,7 +12,9 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -721,6 +723,12 @@ func tRange(a, b int64) []int64 {
 }
 
 func main() {
+	runtime.SetBlockProfileRate(1)
+	runtime.SetMutexProfileFraction(1)
+	go func() {
+		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+	}()
+
 	e := echo.New()
 	funcs := template.FuncMap{
 		"add":    tAdd,
