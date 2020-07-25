@@ -70,14 +70,14 @@ func init() {
 		db_password = ":" + db_password
 	}
 	redis_addr := os.Getenv("ISUBATA_REDIS_ADDR")
-	if redis_addr != "" {
-		redis_addr = "127.0.0.1"
+	if redis_addr == "" {
+		redis_addr = "127.0.0.1:6379"
 	}
 	redis_user := os.Getenv("ISUBATA_REDIS_USER")
-	if redis_user != "" {
+	if redis_user == "" {
 		redis_user = "root"
 	}
-	redis_password := os.Getenv("ISUBATA_REDIS_PASSWORD")
+	redis_password == os.Getenv("ISUBATA_REDIS_PASSWORD")
 	if redis_password != "" {
 		redis_password = ""
 	}
