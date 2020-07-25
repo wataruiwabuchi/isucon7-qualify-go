@@ -96,16 +96,12 @@ func init() {
 		time.Sleep(time.Second * 3)
 	}
 
-	rdb := redis.NewClient(&redis.Options{
+	rdb = redis.NewClient(&redis.Options{
 		Addr:     redis_addr,
 		Username: redis_user,
 		Password: redis_password, // no password set
 		DB:       0,              // use default DB
 	})
-	err := rdb.Set(ctx, "key", "value", 0).Err()
-	if err != nil {
-		panic(err)
-	}
 
 	db.SetMaxOpenConns(20)
 	db.SetConnMaxLifetime(5 * time.Minute)
@@ -251,6 +247,7 @@ func getInitialize(c echo.Context) error {
 	db.MustExec("DELETE FROM channel WHERE id > 10")
 	db.MustExec("DELETE FROM message WHERE id > 10000")
 	db.MustExec("DELETE FROM haveread")
+	rdb.FlushAll(ctx)
 	return c.String(204, "")
 }
 
@@ -390,6 +387,20 @@ func postMessage(c echo.Context) error {
 		return err
 	}
 
+	// channelにコメントが追加された場合はredisのキーをフラッシュする
+	var channel_keys []string
+	err = rdb.Keys(ctx, fmt.Sprintf("unread_*_%v", chanID)).ScanSlice(&channel_keys)
+	if err != nil {
+		return err
+	}
+
+	if len(channel_keys) > 0 {
+		err = rdb.Del(ctx, channel_keys...).Err()
+		if err != nil {
+			return err
+		}
+	}
+
 	return c.NoContent(204)
 }
 
@@ -527,7 +538,7 @@ func fetchUnread(c echo.Context) error {
 		return c.NoContent(http.StatusForbidden)
 	}
 
-	time.Sleep(time.Second)
+	//time.Sleep(time.Second)
 
 	channels, err := queryChannels()
 	if err != nil {
@@ -541,73 +552,78 @@ func fetchUnread(c echo.Context) error {
 		Count     int64 `db:"count"`
 	}
 
-	res := []HaveRead{}
-
-	query :=
-			`
-			SELECT message.channel_id AS channel_id,
-			      Count(*) AS count
-			FROM   message
-			      INNER JOIN (SELECT id                    AS channel_id,
-			                         Ifnull(message_id, 0) AS mid
-			                  FROM   channel
-			                         LEFT JOIN (SELECT channel_id,
-			                                           message_id
-			                                    FROM   haveread
-			                                    WHERE  user_id = ?) AS temp
-			                                ON channel.id = temp.channel_id) AS temp2
-			              ON temp2.channel_id = message.channel_id
-			                 AND id > temp2.mid
-			GROUP  BY message.channel_id
-			`
-	db.Select(&res, query, userID)
-
-	temp_resp := map[int64]int64{}
-	for _, chID := range channels {
-		temp_resp[chID] = 0
+	// redisでuserIDのunreadの個数を取得する
+	// unread_<user_id>_<channel_id>
+	var unread_keys []string
+	err = rdb.Keys(ctx, fmt.Sprintf("unread_%v_*", userID)).ScanSlice(&unread_keys)
+	if err != nil {
+		return err
 	}
-	for _, data := range res {
-		temp_resp[data.ChannelID] = data.Count
+
+	var unread_cnts []interface{}
+	if len(unread_keys) > 0 {
+		unread_cnts, err = rdb.MGet(ctx, unread_keys...).Result()
+		if err != nil {
+			return err
+		}
 	}
+
+	unread_cnts_redis := make(map[string]int64)
+	for i := 0; i < len(unread_keys); i++ {
+		cnt, err := strconv.ParseInt(unread_cnts[i].(string), 10, 64)
+		if err == nil {
+			unread_cnts_redis[unread_keys[i]] = cnt
+		}
+	}
+
+	var seted_values []interface{}
 	for _, chID := range channels {
+		var cnt int64
+		// redisに値が格納されていた場合
+		if value, ok := unread_cnts_redis[fmt.Sprintf("unread_%v_%v", userID, chID)]; ok {
+			cnt = value
+			if err != nil {
+				return err
+			}
+		} else {
+			// redisで見つからなかったものだけmysqlにアクセスして件数を取得する
+
+			lastID, err := queryHaveRead(userID, chID)
+			if err != nil {
+				return err
+			}
+
+			if lastID > 0 {
+				err = db.Get(&cnt,
+					"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
+					chID, lastID)
+			} else {
+				err = db.Get(&cnt,
+					"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
+					chID)
+			}
+			if err != nil {
+				return err
+			}
+
+			// mysqlから取得した分はredisに格納する
+			seted_values = append(seted_values, fmt.Sprintf("unread_%v_%v", userID, chID))
+			seted_values = append(seted_values, fmt.Sprintf("%v", cnt))
+		}
 		r := map[string]interface{}{
 			"channel_id": chID,
-			"unread":     temp_resp[chID]}
+			"unread":     cnt}
 		resp = append(resp, r)
+
+		if len(seted_values) > 0 {
+			err = rdb.MSet(ctx, seted_values...).Err()
+			if err != nil {
+				return err
+			}
+		}
+
+		//fmt.Println(chID, cnt, temp_resp[chID])
 	}
-
-	// redisでuserIDのunreadの個数を取得する
-	// redisで見つからなかったものだけmysqlにアクセスして件数を取得する
-	// mysqlから取得した分はredisに格納する
-	// channelの登録がされた場合はredisのキーをフラッシュする
-	// havereadが更新された場合はキーの部分をフラッシュする
-
-	//for _, chID := range channels {
-	//	lastID, err := queryHaveRead(userID, chID)
-	//	if err != nil {
-	//		return err
-	//	}
-
-	//	var cnt int64
-	//	if lastID > 0 {
-	//		err = db.Get(&cnt,
-	//			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
-	//			chID, lastID)
-	//	} else {
-	//		err = db.Get(&cnt,
-	//			"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
-	//			chID)
-	//	}
-	//	if err != nil {
-	//		return err
-	//	}
-	//	r := map[string]interface{}{
-	//		"channel_id": chID,
-	//		"unread":     cnt}
-	//	resp = append(resp, r)
-
-	//	fmt.Println(chID, cnt, temp_resp[chID])
-	//}
 
 	return c.JSON(http.StatusOK, resp)
 }
