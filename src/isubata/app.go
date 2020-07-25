@@ -77,8 +77,8 @@ func init() {
 	if redis_user == "" {
 		redis_user = "root"
 	}
-	redis_password == os.Getenv("ISUBATA_REDIS_PASSWORD")
-	if redis_password != "" {
+	redis_password := os.Getenv("ISUBATA_REDIS_PASSWORD")
+	if redis_password == "" {
 		redis_password = ""
 	}
 
