@@ -505,7 +505,7 @@ func getMessage(c echo.Context) error {
 		}
 
 		// havereadが更新された場合はキーの部分をフラッシュする
-		err = rdb.Del(ctx, fmt.Sprintf("channel_%v_%v", userID, chanID)).Err()
+		err = rdb.Del(ctx, fmt.Sprintf("unread_%v_%v", userID, chanID)).Err()
 		if err != nil {
 			return err
 		}
