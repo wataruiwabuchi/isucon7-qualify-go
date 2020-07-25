@@ -151,6 +151,20 @@ type Message struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
+type JoinedMessage struct {
+	MessageID        int64     `db:"message_id"`
+	Name             string    `db:"name"`
+	Salt             string    `db:"salt"`
+	Password         string    `db:"password"`
+	DisplayName      string    `db:"display_name"`
+	AvatarIcon       string    `db:"avatar_icon"`
+	MessageCreatedAt time.Time `db:"message_created_at"`
+	ChannelID        int64     `db:"channel_id"`
+	UserID           int64     `db:"user_id"`
+	Content          string    `db:"content"`
+	UserCreatedAt    time.Time `db:"user_created_at"`
+}
+
 func queryMessages(chanID, lastID int64) ([]Message, error) {
 	msgs := []Message{}
 	err := db.Select(&msgs, "SELECT * FROM message WHERE id > ? AND channel_id = ? ORDER BY id DESC LIMIT 100",
@@ -410,26 +424,68 @@ func getMessage(c echo.Context) error {
 		return err
 	}
 
-	messages, err := queryMessages(chanID, lastID)
+	query := `
+	SELECT message.id         AS message_id,
+           user.id            AS user_id,
+           name,
+           salt,
+           password,
+           display_name,
+           avatar_icon,
+           message.created_at AS message_created_at,
+           user.created_at    AS user_created_at,
+           content,
+           channel_id
+    FROM   user
+           RIGHT JOIN (SELECT *
+                       FROM   message
+                       WHERE  id > ?
+                              AND channel_id = ?
+                       ORDER  BY id DESC
+                       LIMIT  100) AS message
+				   ON user.id = message.user_id;
+	`
+
+	joined_messages := []JoinedMessage{}
+	err = db.Select(&joined_messages, query,
+		lastID, chanID)
 	if err != nil {
 		return err
 	}
 
 	response := make([]map[string]interface{}, 0)
-	for i := len(messages) - 1; i >= 0; i-- {
-		m := messages[i]
-		r, err := jsonifyMessage(m)
-		if err != nil {
-			return err
-		}
+	for i := len(joined_messages) - 1; i >= 0; i-- {
+		m := joined_messages[i]
+
+		u := User{}
+		u.ID = m.UserID
+		u.Name = m.Name
+		u.Salt = m.Salt
+		u.Password = m.Password
+		u.DisplayName = m.DisplayName
+		u.AvatarIcon = m.AvatarIcon
+		u.CreatedAt = m.UserCreatedAt
+
+		r := make(map[string]interface{})
+		r["id"] = m.MessageID
+		r["user"] = u
+		r["date"] = m.MessageCreatedAt.Format("2006/01/02 15:04:05")
+		r["content"] = m.Content
+
 		response = append(response, r)
 	}
 
-	if len(messages) > 0 {
+	if len(joined_messages) > 0 {
 		_, err := db.Exec("INSERT INTO haveread (user_id, channel_id, message_id, updated_at, created_at)"+
 			" VALUES (?, ?, ?, NOW(), NOW())"+
 			" ON DUPLICATE KEY UPDATE message_id = ?, updated_at = NOW()",
-			userID, chanID, messages[0].ID, messages[0].ID)
+			userID, chanID, joined_messages[0].MessageID, joined_messages[0].MessageID)
+		if err != nil {
+			return err
+		}
+
+		// havereadが更新された場合はキーの部分をフラッシュする
+		err = rdb.Del(ctx, fmt.Sprintf("channel_%v_%v", userID, chanID)).Err()
 		if err != nil {
 			return err
 		}
