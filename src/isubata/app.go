@@ -520,6 +520,12 @@ func fetchUnread(c echo.Context) error {
 		resp = append(resp, r)
 	}
 
+	// redisでuserIDのunreadの個数を取得する
+	// redisで見つからなかったものだけmysqlにアクセスして件数を取得する
+	// mysqlから取得した分はredisに格納する
+	// channelの登録がされた場合はredisのキーをフラッシュする
+	// havereadが更新された場合はキーの部分をフラッシュする
+
 	//for _, chID := range channels {
 	//	lastID, err := queryHaveRead(userID, chID)
 	//	if err != nil {
