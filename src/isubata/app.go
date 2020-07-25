@@ -394,6 +394,15 @@ func postMessage(c echo.Context) error {
 		return err
 	}
 
+	channel_keys = append(channel_keys, fmt.Sprintf("count_channel_%v", chanID))
+
+	if len(channel_keys) > 0 {
+		err = rdb.Del(ctx, channel_keys...).Err()
+		if err != nil {
+			return err
+		}
+	}
+
 	if len(channel_keys) > 0 {
 		err = rdb.Del(ctx, channel_keys...).Err()
 		if err != nil {
@@ -540,22 +549,12 @@ func fetchUnread(c echo.Context) error {
 
 	//time.Sleep(time.Second)
 
-	channels, err := queryChannels()
-	if err != nil {
-		return err
-	}
-
 	resp := []map[string]interface{}{}
-
-	type HaveRead struct {
-		ChannelID int64 `db:"channel_id"`
-		Count     int64 `db:"count"`
-	}
 
 	// redisでuserIDのunreadの個数を取得する
 	// unread_<user_id>_<channel_id>
 	var unread_keys []string
-	err = rdb.Keys(ctx, fmt.Sprintf("unread_%v_*", userID)).ScanSlice(&unread_keys)
+	err := rdb.Keys(ctx, fmt.Sprintf("unread_%v_*", userID)).ScanSlice(&unread_keys)
 	if err != nil {
 		return err
 	}
@@ -576,8 +575,30 @@ func fetchUnread(c echo.Context) error {
 		}
 	}
 
+	type HaveRead struct {
+		ChannelID int64 `db:"channel_id"`
+		MessageID int64 `db:"message_id"`
+	}
+
+	var havereads []HaveRead
+	query := `
+		SELECT id                             AS channel_id,
+       Ifnull(haveread.message_id, 0) AS message_id
+FROM   channel
+       LEFT JOIN (SELECT *
+                  FROM   haveread
+                  WHERE  user_id = ?) AS haveread
+              ON channel.id = haveread.channel_id;
+		`
+
+	err = db.Select(&havereads,
+		query,
+		userID)
+
 	var seted_values []interface{}
-	for _, chID := range channels {
+	for _, haveread := range havereads {
+		chID := haveread.ChannelID
+		lastID := haveread.MessageID
 		var cnt int64
 		// redisに値が格納されていた場合
 		if value, ok := unread_cnts_redis[fmt.Sprintf("unread_%v_%v", userID, chID)]; ok {
@@ -588,19 +609,29 @@ func fetchUnread(c echo.Context) error {
 		} else {
 			// redisで見つからなかったものだけmysqlにアクセスして件数を取得する
 
-			lastID, err := queryHaveRead(userID, chID)
-			if err != nil {
-				return err
-			}
-
 			if lastID > 0 {
 				err = db.Get(&cnt,
 					"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ? AND ? < id",
 					chID, lastID)
 			} else {
-				err = db.Get(&cnt,
-					"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
-					chID)
+
+				val, err := rdb.Get(ctx, fmt.Sprintf("count_channel_%v", chID)).Result()
+				if err != nil {
+					err = db.Get(&cnt,
+						"SELECT COUNT(*) as cnt FROM message WHERE channel_id = ?",
+						chID)
+
+					if err != nil {
+						return err
+					}
+
+					seted_values = append(seted_values, fmt.Sprintf("count_channel_%v", chID))
+					seted_values = append(seted_values, fmt.Sprintf("%v", cnt))
+
+				} else {
+					cnt, _ = strconv.ParseInt(val, 10, 64)
+				}
+
 			}
 			if err != nil {
 				return err
