@@ -569,9 +569,11 @@ func fetchUnread(c echo.Context) error {
 
 	unread_cnts_redis := make(map[string]int64)
 	for i := 0; i < len(unread_keys); i++ {
-		cnt, err := strconv.ParseInt(unread_cnts[i].(string), 10, 64)
-		if err == nil {
-			unread_cnts_redis[unread_keys[i]] = cnt
+		if unread_cnts[i] != nil {
+			cnt, err := strconv.ParseInt(unread_cnts[i].(string), 10, 64)
+			if err == nil {
+				unread_cnts_redis[unread_keys[i]] = cnt
+			}
 		}
 	}
 
