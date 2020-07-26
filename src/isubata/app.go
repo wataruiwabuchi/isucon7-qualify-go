@@ -597,7 +597,6 @@ FROM   channel
 		query,
 		userID)
 
-	var seted_values []interface{}
 	for _, haveread := range havereads {
 		chID := haveread.ChannelID
 		lastID := haveread.MessageID
@@ -627,8 +626,10 @@ FROM   channel
 						return err
 					}
 
-					seted_values = append(seted_values, fmt.Sprintf("count_channel_%v", chID))
-					seted_values = append(seted_values, fmt.Sprintf("%v", cnt))
+					err = rdb.Set(ctx, fmt.Sprintf("count_channel_%v", chID), fmt.Sprintf("%v", cnt), 0).Err()
+					if err != nil {
+						return err
+					}
 
 				} else {
 					cnt, _ = strconv.ParseInt(val, 10, 64)
@@ -640,22 +641,15 @@ FROM   channel
 			}
 
 			// mysqlから取得した分はredisに格納する
-			seted_values = append(seted_values, fmt.Sprintf("unread_%v_%v", userID, chID))
-			seted_values = append(seted_values, fmt.Sprintf("%v", cnt))
+			err = rdb.Set(ctx, fmt.Sprintf("unread_%v_%v", userID, chID), fmt.Sprintf("%v", cnt), 0).Err()
+			if err != nil {
+				return err
+			}
 		}
 		r := map[string]interface{}{
 			"channel_id": chID,
 			"unread":     cnt}
 		resp = append(resp, r)
-
-		if len(seted_values) > 0 {
-			err = rdb.MSet(ctx, seted_values...).Err()
-			if err != nil {
-				return err
-			}
-		}
-
-		//fmt.Println(chID, cnt, temp_resp[chID])
 	}
 
 	return c.JSON(http.StatusOK, resp)
